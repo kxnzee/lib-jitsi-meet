@@ -45,7 +45,7 @@ import Listenable from './modules/util/Listenable';
 import { isValidNumber, safeSubtract } from './modules/util/MathUtil';
 import RandomUtil from './modules/util/RandomUtil';
 import { getJitterDelay } from './modules/util/Retry';
-import { findAll, findFirst, getAttribute } from './modules/util/XMLUtils';
+import { findAll, findFirst, getAttribute, getFirstChildElement } from './modules/util/XMLUtils';
 import ComponentsVersions from './modules/version/ComponentsVersions';
 import JitsiVideoSIPGWSession from './modules/videosipgw/JitsiVideoSIPGWSession';
 import VideoSIPGW from './modules/videosipgw/VideoSIPGW';
@@ -66,6 +66,7 @@ import XMPP, {
 } from './modules/xmpp/xmpp';
 import { BridgeVideoType } from './service/RTC/BridgeVideoType';
 import { CodecMimeType } from './service/RTC/CodecMimeType';
+import { IceRestartReason } from './service/RTC/IceRestartReason';
 import { MediaType } from './service/RTC/MediaType';
 import { RTCEvents } from './service/RTC/RTCEvents';
 import {
@@ -139,6 +140,7 @@ export interface IConferenceOptions {
         statisticsId?: string;
         testing?: {
             allowMultipleTracks?: boolean;
+            disableAV1DecodeForFF?: boolean;
             enableAV1ForFF?: boolean;
             enableFirefoxP2p?: boolean;
             forceInitiator?: boolean;
@@ -703,6 +705,7 @@ export default class JitsiConference extends Listenable {
         const qualityOptions = {
             enableAdaptiveMode: config.videoQuality?.enableAdaptiveMode,
             jvb: {
+                disableAV1DecodeForFF: config.testing?.disableAV1DecodeForFF,
                 disabledCodec: _getCodecMimeType(config.videoQuality?.disabledCodec),
                 enableAV1ForFF: config.testing?.enableAV1ForFF,
                 preferenceOrder: browser.isMobileDevice()
@@ -1899,7 +1902,7 @@ export default class JitsiConference extends Listenable {
             this._delayedIceFailed.start();
         };
 
-        this.restartJvbIce('ice-failed')
+        this.restartJvbIce(IceRestartReason.ICE_FAILED)
             .then(() => {
                 setTimeout(() => {
                     const iceState = this.jvbJingleSession?.getIceConnectionState();
@@ -2337,7 +2340,7 @@ export default class JitsiConference extends Listenable {
             this._pendingTranslationRequests.delete(id);
         }
 
-        const condition = findFirst(stanza, 'error')?.firstElementChild?.localName;
+        const condition = getFirstChildElement(findFirst(stanza, 'error'))?.localName;
         const error = (Object.values(JitsiAudioTranslationErrors) as string[]).includes(condition ?? '')
             ? condition as JitsiAudioTranslationErrors
             : JitsiAudioTranslationErrors.UNKNOWN;
@@ -2444,10 +2447,10 @@ export default class JitsiConference extends Listenable {
      * {@link JingleSessionPC.onBridgeIceRestartTransport}, so the promise returned here settling only means that
      * the request itself was accepted. Trigger from the console: `APP.conference._room.restartJvbIce()`.
      *
-     * @param {string} reason - Why the restart was triggered, for logs and analytics ('api', 'ice-failed', ...).
+     * @param {IceRestartReason} reason - Why the restart was triggered, for logs and analytics.
      * @returns {Promise<void>} - Resolves when Jicofo has accepted the request, rejects otherwise.
      */
-    public restartJvbIce(reason: string = 'api'): Promise<void> {
+    public restartJvbIce(reason: IceRestartReason = IceRestartReason.API): Promise<void> {
         if (!this.isIceRestartSupported()) {
             return Promise.reject(new Error('ICE restart is not supported (disabled in config)'));
         }
@@ -3184,6 +3187,34 @@ export default class JitsiConference extends Listenable {
     }
 
     /**
+     * Sends a message retraction to the other participants in the conference.
+     *
+     * @param {string} messageId - The ID of the message being retracted.
+     * @param {string} [receiverId] - The intended recipient if the message is private.
+     * @param {boolean} [useFullJid=false] - Whether receiverId is already a full JID.
+     */
+    public sendMessageRetraction(messageId: string, receiverId?: string, useFullJid = false): void {
+        if (this.room) {
+            this.room.sendMessageRetraction(messageId, receiverId, useFullJid);
+        }
+    }
+
+    /**
+     * Sends a correction of a message this participant sent earlier (XEP-0308).
+     *
+     * @param {string} messageId - The id of the message being corrected.
+     * @param {string} message - The new text.
+     * @param {string} [receiverId] - Set for a private message, the recipient.
+     * @param {boolean} [useFullJid=false] - Whether receiverId is a full jid.
+     */
+    public sendMessageCorrection(
+            messageId: string, message: string, receiverId?: string, useFullJid = false): void {
+        if (this.room) {
+            this.room.sendMessageCorrection(messageId, message, receiverId, useFullJid);
+        }
+    }
+
+    /**
    * Sends private text message to another participant of the conference.
    * @param {string} id - The ID of the participant to send a private message.
    * @param {string} message - The text message.
@@ -3197,6 +3228,16 @@ export default class JitsiConference extends Listenable {
         if (this.room) {
             this.room.sendPrivateMessage(id, message, elementName, useFullJid, replyToId, messageId);
         }
+    }
+
+    /**
+     * Sends a moderation request for a message.
+     *
+     * @param {string} messageId - The id of the message.
+     * @param {string} [reason] - Optional moderation reason
+     */
+    public moderateMessage(messageId: string, reason?: string): void {
+        this.room?.moderateMessage(messageId, reason);
     }
 
     /**
@@ -4454,18 +4495,20 @@ export default class JitsiConference extends Listenable {
      * Sets a property for the local participant.
      * @param {string} name - The name of the property.
      * @param {string} value - The value of the property.
+     * @param {boolean} [useRawKeys] - Skip the "jitsi_participant_" prefix when true.
      * @returns {void}
      */
-    public setLocalParticipantProperty(name: string, value: string | string[]): void {
-        this.sendCommand(`jitsi_participant_${name}`, { value });
+    public setLocalParticipantProperty(name: string, value: string | string[], useRawKeys = false): void {
+        this.sendCommand(useRawKeys ? name : `jitsi_participant_${name}`, { value });
     }
 
     /**
      * Sets multiple properties for the local participant in a single presence update.
      * @param {Record<string, string | string[]>} properties - Object of property names to values.
+     * @param {boolean} [useRawKeys] - Skip the "jitsi_participant_" prefix when true.
      * @returns {void}
      */
-    public setLocalParticipantProperties(properties: Record<string, string | string[]>): void {
+    public setLocalParticipantProperties(properties: Record<string, string | string[]>, useRawKeys = false): void {
         if (!this.room) {
             return;
         }
@@ -4473,7 +4516,8 @@ export default class JitsiConference extends Listenable {
         let changed = false;
 
         for (const name of Object.keys(properties)) {
-            const wasChanged = this.room.addOrReplaceInPresence(`jitsi_participant_${name}`, { value: properties[name] });
+            const tagName = useRawKeys ? name : `jitsi_participant_${name}`;
+            const wasChanged = this.room.addOrReplaceInPresence(tagName, { value: properties[name] });
 
             changed = changed || Boolean(wasChanged);
         }
@@ -4486,10 +4530,11 @@ export default class JitsiConference extends Listenable {
     /**
      * Removes a property for the local participant and sends the updated presence.
      * @param {string} name - The name of the property to remove.
+     * @param {boolean} [useRawKeys] - Skip the "jitsi_participant_" prefix when true.
      * @returns {void}
      */
-    public removeLocalParticipantProperty(name: string): void {
-        this.removeCommand(`jitsi_participant_${name}`);
+    public removeLocalParticipantProperty(name: string, useRawKeys = false): void {
+        this.removeCommand(useRawKeys ? name : `jitsi_participant_${name}`);
         if (this.room) {
             this.room.sendPresence();
         }
@@ -4509,11 +4554,13 @@ export default class JitsiConference extends Listenable {
     /**
      * Gets a local participant property.
      * @param {string} name - The name of the property to retrieve.
+     * @param {boolean} [useRawKeys] - Skip the "jitsi_participant_" prefix when true.
      * @returns {string|undefined} The value of the property if it exists, otherwise undefined.
      */
-    public getLocalParticipantProperty(name: string): Optional<string> {
+    public getLocalParticipantProperty(name: string, useRawKeys = false): Optional<string> {
+        const tagName = useRawKeys ? name : `jitsi_participant_${name}`;
         const property = this.room.presMap.nodes.find(prop =>
-            prop.tagName === `jitsi_participant_${name}`
+            prop.tagName === tagName
         );
 
         return property ? property.value : undefined;
@@ -4961,6 +5008,16 @@ export default class JitsiConference extends Listenable {
     }
 
     /**
+     * Returns <tt>true</tt> when the room handles message moderation and editing
+     * server side. Clients should only offer those actions when it does.
+     *
+     * @returns {boolean} whether the room applies message moderation.
+     */
+    public isMessageModerationSupported(): boolean {
+        return Boolean(this.room?.messageModerationSupported);
+    }
+
+    /**
      * Enables lobby by moderators
      *
      * @returns {Promise} resolves when lobby room is joined or rejects with the error.
@@ -5065,6 +5122,41 @@ export default class JitsiConference extends Listenable {
         if (this.room) {
             return this.room.getLobby().removeMessageHandler(handler);
         }
+    }
+
+    /**
+     * Sends a message retraction to the lobby room.
+     * @param {string} messageId - The ID of the message being retracted.
+     * @param {string} [id] - The participant id, if the message was private.
+     * @returns {void}
+     */
+    public sendLobbyMessageRetraction(messageId: string, id?: string): void {
+        const lobby = this.room?.getLobby();
+
+        lobby?.sendMessageRetraction(messageId, id);
+    }
+
+    /**
+     * Adds a message retraction listener to the lobby room.
+     * @param {Function} listener - called with (messageId, participantId).
+     * @returns {Optional<EventListener>}
+     */
+    public addLobbyMessageRetractionListener(
+            listener: (messageId: string, participantId: string) => void): Optional<EventListener> {
+        const lobby = this.room?.getLobby();
+
+        return lobby?.addMessageRetractionListener(listener) as Optional<EventListener>;
+    }
+
+    /**
+     * Removes a message retraction handler from the lobby room.
+     * @param {Function} handler - The handler function to remove.
+     * @returns {void}
+     */
+    public removeLobbyMessageRetractionHandler(handler: (messageId: string, participantId: string) => void): void {
+        const lobby = this.room?.getLobby();
+
+        lobby?.removeMessageRetractionHandler(handler);
     }
 
     /**

@@ -5,6 +5,7 @@ import { $build, $iq, Strophe } from 'strophe.js';
 import { JitsiConferenceEvents } from '../../JitsiConferenceEvents';
 import { JitsiTrackEvents } from '../../JitsiTrackEvents';
 import { CodecMimeType } from '../../service/RTC/CodecMimeType';
+import { IceRestartReason } from '../../service/RTC/IceRestartReason';
 import { MediaDirection } from '../../service/RTC/MediaDirection';
 import { MediaType } from '../../service/RTC/MediaType';
 import { SSRC_GROUP_SEMANTICS } from '../../service/RTC/StandardVideoQualitySettings';
@@ -12,6 +13,7 @@ import { VideoType } from '../../service/RTC/VideoType';
 import { AnalyticsEvents, createAudioWedgeRecoveryEvent, createJingleEvent } from '../../service/statistics/AnalyticsEvents';
 import { XMPPEvents } from '../../service/xmpp/XMPPEvents';
 import { XEP } from '../../service/xmpp/XMPPExtensioProtocols';
+import { COMMIT_HASH } from '../../version';
 import JitsiLocalTrack from '../RTC/JitsiLocalTrack';
 import JitsiRemoteTrack from '../RTC/JitsiRemoteTrack';
 import RemoteAudioWedgeDetector from '../RTC/RemoteAudioWedgeDetector';
@@ -27,7 +29,7 @@ import SDPUtil from '../sdp/SDPUtil';
 import Statistics from '../statistics/statistics';
 import AsyncQueue, { ClearedQueueError } from '../util/AsyncQueue';
 import { TraceParentExtension } from '../util/OTel';
-import { exists, findAll, findFirst, getAttribute } from '../util/XMLUtils';
+import { exists, findAll, findFirst, getAttribute, getLastChildElement } from '../util/XMLUtils';
 
 import JingleSession from './JingleSession';
 import { JingleSessionState } from './JingleSessionState';
@@ -1327,10 +1329,11 @@ export default class JingleSessionPC extends JingleSession {
             localSDP.transportToJingle(idx, transportInfo);
 
             // transportToJingle() leaves the cursor back on <content>, so tag the <transport> it just appended
-            // directly rather than through the builder.
-            const transportEl = transportInfo.node?.lastElementChild;
+            // directly rather than through the builder. Not via lastElementChild: the xmldom DOM used on React
+            // Native does not implement it.
+            const transportEl = getLastChildElement(transportInfo.node, 'transport');
 
-            if (transportEl?.tagName === 'transport') {
+            if (transportEl) {
                 transportEl.setAttribute('ice-generation', String(generation));
             } else {
                 logger.warn(`${this} ${ICE_RESTART_LOG_PREFIX} gen=${generation}: could not tag the transport `
@@ -1381,6 +1384,15 @@ export default class JingleSessionPC extends JingleSession {
         }
         if (trace != null) {
             accept.c(trace.ELEMENT, trace.asAttributes()).up();
+        }
+
+        // Report the version of the library to the focus, which uses it for logging. Only for the session with the
+        // focus, a peer does not need it.
+        if (!this.isP2P) {
+            accept.c('client-version', {
+                version: COMMIT_HASH,
+                xmlns: 'http://jitsi.org/protocol/focus'
+            }).up();
         }
         localSDP.toJingle(
             accept,
@@ -1764,11 +1776,11 @@ export default class JingleSessionPC extends JingleSession {
      *
      * Grep the logs for `[ice-restart]` to follow a restart end to end.
      *
-     * @param {string} reason - why the restart was requested, for the logs.
+     * @param {IceRestartReason} reason - why the restart was requested, for the logs.
      * @returns {Promise<void>} - resolves when Jicofo has acknowledged the request, rejects if it did not accept
      * it (which is the signal to fall back to a full session restart).
      */
-    public restartIce(reason: string = 'api'): Promise<void> {
+    public restartIce(reason: IceRestartReason = IceRestartReason.API): Promise<void> {
         if (this.isP2P) {
             return Promise.reject(new Error('an in-place ICE restart is only supported for the JVB session'));
         }
