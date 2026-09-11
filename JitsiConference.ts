@@ -4952,6 +4952,15 @@ export default class JitsiConference extends Listenable {
     }
 
     /**
+     * Returns the focus region captured when the conference was initially allocated.
+     *
+     * @returns {string|undefined} the configured focus region, if any.
+     */
+    public getFocusRegion(): string | undefined {
+        return this.room?.xmpp?.moderator?.getFocusRegion();
+    }
+
+    /**
      * Enables lobby by moderators
      *
      * @returns {Promise} resolves when lobby room is joined or rejects with the error.
