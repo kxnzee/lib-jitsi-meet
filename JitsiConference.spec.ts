@@ -1,4 +1,5 @@
 import { XMPPEvents } from './service/xmpp/XMPPEvents';
+import JitsiConference from './JitsiConference';
 import { JitsiConferenceEvents } from './JitsiConferenceEvents';
 import JitsiConferenceEventManager from './JitsiConferenceEventManager';
 
@@ -264,6 +265,41 @@ describe('JitsiConference', () => {
                 false,                        // isVisitor
                 undefined                     // replyToId
             );
+        });
+    });
+
+    describe('generic conference-properties pass-through (focus-version)', () => {
+        // Narrow consumer-boundary check: JitsiConference._updateProperties/getProperty are
+        // key-agnostic, so a 'focus-version' entry reaches JitsiConference.properties without
+        // a per-key allow-list. This does not exercise the producer side (ChatRoom's
+        // 'conference-properties' presence parsing/emit) - see ChatRoom.spec.ts for that.
+        let fakeConference: any;
+
+        beforeEach(() => {
+            fakeConference = {
+                _hasVisitors: false,
+                _maybeStartOrStopP2P: () => {},
+                eventEmitter: { emit: () => {} },
+                properties: {}
+            };
+        });
+
+        it('exposes focus-version via getProperty when the presence carries it', () => {
+            (JitsiConference.prototype as any)._updateProperties.call(fakeConference, {
+                'focus-version': '1.2.3'
+            });
+
+            expect(
+                JitsiConference.prototype.getProperty.call(fakeConference, 'focus-version')
+            ).toBe('1.2.3');
+        });
+
+        it('returns undefined from getProperty when the presence carries no focus-version', () => {
+            (JitsiConference.prototype as any)._updateProperties.call(fakeConference, {});
+
+            expect(
+                JitsiConference.prototype.getProperty.call(fakeConference, 'focus-version')
+            ).toBeUndefined();
         });
     });
 });
