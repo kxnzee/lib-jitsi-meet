@@ -302,4 +302,44 @@ describe('JitsiConference', () => {
             ).toBeUndefined();
         });
     });
+
+    describe('generic conference-properties pass-through (focus-build-id)', () => {
+        // Narrow consumer-boundary check: JitsiConference._updateProperties/getProperty are
+        // key-agnostic, so a 'focus-build-id' entry reaches JitsiConference.properties without
+        // a per-key allow-list. This does not exercise the producer side (ChatRoom's
+        // 'conference-properties' presence parsing/emit) - see ChatRoom.spec.ts for that.
+        let fakeConference: any;
+
+        beforeEach(() => {
+            fakeConference = {
+                _hasVisitors: false,
+                _maybeStartOrStopP2P: () => {},
+                eventEmitter: { emit: () => {} },
+                properties: {}
+            };
+        });
+
+        it('exposes focus-build-id via getProperty with its surrounding whitespace intact', () => {
+            (JitsiConference.prototype as any)._updateProperties.call(fakeConference, {
+                'focus-build-id': '  build-2026.09  '
+            });
+
+            expect(
+                JitsiConference.prototype.getProperty.call(fakeConference, 'focus-build-id')
+            ).toBe('  build-2026.09  ');
+        });
+
+        it('returns undefined from getProperty for focus-build-id while keeping other properties when it is absent', () => {
+            (JitsiConference.prototype as any)._updateProperties.call(fakeConference, {
+                'other-property': 'other-value'
+            });
+
+            expect(
+                JitsiConference.prototype.getProperty.call(fakeConference, 'focus-build-id')
+            ).toBeUndefined();
+            expect(
+                JitsiConference.prototype.getProperty.call(fakeConference, 'other-property')
+            ).toBe('other-value');
+        });
+    });
 });
