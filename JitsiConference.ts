@@ -4999,6 +4999,15 @@ export default class JitsiConference extends Listenable {
     }
 
     /**
+     * Returns the focus region captured when the conference was initially allocated.
+     *
+     * @returns {string|undefined} the configured focus region, if any.
+     */
+    public getFocusRegion(): string | undefined {
+        return this.room?.xmpp?.moderator?.getFocusRegion();
+    }
+
+    /**
      * Returns <tt>true</tt> when the room handles message moderation and editing
      * server side. Clients should only offer those actions when it does.
      *

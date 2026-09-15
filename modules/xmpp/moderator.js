@@ -74,6 +74,12 @@ export default class Moderator extends Listenable {
         // in certain cases we need to know this to be able to get decisions on some errors (max-occupants reached)
         this.visitorsSupported = false;
 
+        // Region returned by the first successful conference allocation response. Keep a
+        // separate initialization flag so an initially absent value cannot be replaced by a
+        // later response after a focus migration.
+        this.focusRegion = undefined;
+        this.focusRegionInitialized = false;
+
         this.xmpp = xmpp;
         this.connection = xmpp.connection;
 
@@ -147,6 +153,15 @@ export default class Moderator extends Listenable {
      */
     isSipGatewayEnabled() {
         return this.sipGatewayEnabled;
+    }
+
+    /**
+     * Returns the focus region captured from the initial conference allocation response.
+     *
+     * @returns {string|undefined}
+     */
+    getFocusRegion() {
+        return this.focusRegion;
     }
 
     /**
@@ -287,6 +302,14 @@ export default class Moderator extends Listenable {
             conferenceRequest.properties.live = 'false';
         }
 
+        const focusRegion = getAttribute(
+            findFirst(resultIq, ':scope>conference>property[name="focus-region"]'),
+            'value');
+
+        if (focusRegion) {
+            conferenceRequest.properties['focus-region'] = focusRegion;
+        }
+
         return conferenceRequest;
     }
 
@@ -425,6 +448,11 @@ export default class Moderator extends Listenable {
         }
 
         this.visitorsSupported = conferenceRequest.properties['visitors-supported'];
+
+        if (!this.focusRegionInitialized) {
+            this.focusRegion = conferenceRequest.properties['focus-region'];
+            this.focusRegionInitialized = true;
+        }
 
         if (conferenceRequest.ready) {
             // Reset the non-error timeout (because we've succeeded here).
