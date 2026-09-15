@@ -507,6 +507,78 @@ describe('ChatRoom', () => {
             ]);
         });
 
+        it('parses conference-properties from a focus presence and emits both properties', () => {
+            const focusXmpp: IMockXMPP = {
+                moderator: new Moderator({
+                    options: { focusUserJid: 'focusjid' }
+                } as any),
+                options: {},
+                addListener: () => {} // eslint-disable-line no-empty-function
+            };
+            const focusRoom = new ChatRoom(
+                {} as XmppConnection /* connection */,
+                'jid',
+                'password',
+                focusXmpp as any,
+                {} /* options */);
+            const focusEmitterSpy = spyOn(focusRoom.eventEmitter, 'emit');
+
+            const presStr = '' +
+                '<presence to="tojid" from="fromjid">' +
+                    '<x xmlns=\'http://jabber.org/protocol/muc#user\'>' +
+                        '<item jid=\'focusjid/focus\'/>' +
+                    '</x>' +
+                    '<conference-properties>' +
+                        '<property key=\'focus-version\' value=\'1.0.123\'/>' +
+                        '<property key=\'other-property\' value=\'other-value\'/>' +
+                    '</conference-properties>' +
+                '</presence>';
+            const pres = new DOMParser().parseFromString(presStr, 'text/xml').documentElement;
+
+            focusRoom.onPresence(pres);
+
+            expect(focusEmitterSpy).toHaveBeenCalledWith(
+                XMPPEvents.CONFERENCE_PROPERTIES_CHANGED,
+                {
+                    'focus-version': '1.0.123',
+                    'other-property': 'other-value'
+                });
+        });
+
+        it('does not invent a conference property that is absent from the presence', () => {
+            const focusXmpp: IMockXMPP = {
+                moderator: new Moderator({
+                    options: { focusUserJid: 'focusjid' }
+                } as any),
+                options: {},
+                addListener: () => {} // eslint-disable-line no-empty-function
+            };
+            const focusRoom = new ChatRoom(
+                {} as XmppConnection /* connection */,
+                'jid',
+                'password',
+                focusXmpp as any,
+                {} /* options */);
+            const focusEmitterSpy = spyOn(focusRoom.eventEmitter, 'emit');
+
+            const presStr = '' +
+                '<presence to="tojid" from="fromjid">' +
+                    '<x xmlns=\'http://jabber.org/protocol/muc#user\'>' +
+                        '<item jid=\'focusjid/focus\'/>' +
+                    '</x>' +
+                    '<conference-properties>' +
+                        '<property key=\'focus-version\' value=\'1.0.123\'/>' +
+                    '</conference-properties>' +
+                '</presence>';
+            const pres = new DOMParser().parseFromString(presStr, 'text/xml').documentElement;
+
+            focusRoom.onPresence(pres);
+
+            expect(focusEmitterSpy).toHaveBeenCalledWith(
+                XMPPEvents.CONFERENCE_PROPERTIES_CHANGED,
+                { 'focus-version': '1.0.123' });
+        });
+
     });
 
     describe('sendMessage', () => {
